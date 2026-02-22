@@ -1,0 +1,43 @@
+telegram:
+  token: "123456:ABC-DEF..."
+  chat_id: 123456789
+
+mqtt:
+  host: "192.168.1.100"
+  port: 1883
+  username: "mqtt_user"
+  password: "mqtt_password"
+
+devices:
+  water_leak:
+    - friendly_name: "water_leak_kitchen"
+      alias: "Кухня"
+  climate:
+    - friendly_name: "temp_sensor_livingroom"
+      alias: "Гостиная"
+  relay:
+    - friendly_name: "relay_boiler"
+      alias: "Бойлер"
+      # state_key не указан — по умолчанию "state"
+    - friendly_name: "bathroom"
+      alias: "Ванная лево"
+      state_key: "state_left"
+    - friendly_name: "bathroom"
+      alias: "Ванная право"
+      state_key: "state_right"
+    - friendly_name: "bath_relay"
+      alias: "Ванная свет 1"
+      state_key: "state_l1"
+      countdown: 900
+      interlock:
+        - "state_l2"
+    - friendly_name: "bath_relay"
+      alias: "Ванная свет 2"
+      state_key: "state_l2"
+      countdown: 900
+      interlock:
+        - "state_l1"
+    - friendly_name: "bath_relay"
+      alias: "Ванная свет 3"
+      state_key: "state_l3"
+      countdown: 900
