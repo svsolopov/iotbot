@@ -8,36 +8,54 @@ mqtt:
   username: "mqtt_user"
   password: "mqtt_password"
 
-devices:
-  water_leak:
-    - friendly_name: "water_leak_kitchen"
-      alias: "Кухня"
-  climate:
-    - friendly_name: "temp_sensor_livingroom"
-      alias: "Гостиная"
-  relay:
-    - friendly_name: "relay_boiler"
-      alias: "Бойлер"
-      # state_key не указан — по умолчанию "state"
-    - friendly_name: "bathroom"
-      alias: "Ванная лево"
-      state_key: "state_left"
-    - friendly_name: "bathroom"
-      alias: "Ванная право"
-      state_key: "state_right"
-    - friendly_name: "bath_relay"
-      alias: "Ванная свет 1"
-      state_key: "state_l1"
-      countdown: 900
-      interlock:
-        - "state_l2"
-    - friendly_name: "bath_relay"
-      alias: "Ванная свет 2"
-      state_key: "state_l2"
-      countdown: 900
-      interlock:
-        - "state_l1"
-    - friendly_name: "bath_relay"
-      alias: "Ванная свет 3"
-      state_key: "state_l3"
-      countdown: 900
+sensors:
+  - section: "Климат"
+    emoji: "🌡"
+    items:
+      - friendly_name: "temp_sensor_livingroom"
+        alias: "Гостиная"
+        # z2m + нет state_key → автодетект temperature/humidity
+
+  - section: "Протечки"
+    emoji: "💧"
+    items:
+      - friendly_name: "water_leak_kitchen"
+        alias: "Кухня"
+        state_key: "water_leak"
+        notify: instant
+
+  - section: "Счётчики воды"
+    emoji: "🔢"
+    items:
+      - friendly_name: "pulsar"
+        alias: "ХВС"
+        type: esphome
+        state_key: "pulsar_1_channel_1"
+        unit: "м³"
+
+relay:
+  - friendly_name: "relay_boiler"
+    alias: "Бойлер"
+    # state_key не указан — по умолчанию "state"
+  - friendly_name: "bathroom"
+    alias: "Ванная лево"
+    state_key: "state_left"
+  - friendly_name: "bathroom"
+    alias: "Ванная право"
+    state_key: "state_right"
+  - friendly_name: "bath_relay"
+    alias: "Ванная свет 1"
+    state_key: "state_l1"
+    countdown: 900
+    interlock:
+      - "state_l2"
+  - friendly_name: "bath_relay"
+    alias: "Ванная свет 2"
+    state_key: "state_l2"
+    countdown: 900
+    interlock:
+      - "state_l1"
+  - friendly_name: "bath_relay"
+    alias: "Ванная свет 3"
+    state_key: "state_l3"
+    countdown: 900

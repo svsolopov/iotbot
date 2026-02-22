@@ -32,30 +32,41 @@ func SetupHandlers(bot *tele.Bot, cfg *Config) {
 	bot.Handle("/sensors", func(c tele.Context) error {
 		var sections []string
 
-		if len(cfg.Devices.Climate) > 0 {
-			lines := []string{"\xf0\x9f\x8c\xa1 Климат:"}
-			for _, dev := range cfg.Devices.Climate {
+		for _, section := range cfg.Sensors {
+			if len(section.Items) == 0 {
+				continue
+			}
+			lines := []string{section.Emoji + " " + section.Section + ":"}
+			for _, dev := range section.Items {
 				val, ok := deviceState.Load(dev.FriendlyName)
 				if !ok {
 					lines = append(lines, fmt.Sprintf("  %s: нет данных", dev.Alias))
 					continue
 				}
 				state, _ := val.(map[string]interface{})
-				if dev.Type == "esphome" {
-					if dev.StateKey != "" {
-						if v, ok := state[dev.StateKey]; ok {
-							unit := dev.Unit
-							if unit != "" {
-								unit = " " + unit
-							}
-							lines = append(lines, fmt.Sprintf("  %s: %v%s", dev.Alias, v, unit))
-						} else {
-							lines = append(lines, fmt.Sprintf("  %s: нет данных", dev.Alias))
-						}
-					} else {
+				if dev.StateKey != "" {
+					// Явный state_key — читаем конкретное значение
+					v, ok := state[dev.StateKey]
+					if !ok {
 						lines = append(lines, fmt.Sprintf("  %s: нет данных", dev.Alias))
+						continue
+					}
+					switch typedVal := v.(type) {
+					case bool:
+						if typedVal {
+							lines = append(lines, fmt.Sprintf("  %s: ⚠️ сработал", dev.Alias))
+						} else {
+							lines = append(lines, fmt.Sprintf("  %s: норма", dev.Alias))
+						}
+					default:
+						unit := dev.Unit
+						if unit != "" {
+							unit = " " + unit
+						}
+						lines = append(lines, fmt.Sprintf("  %s: %v%s", dev.Alias, v, unit))
 					}
 				} else {
+					// Нет state_key — автодетект temperature/humidity
 					var parts []string
 					if temp, ok := state["temperature"]; ok {
 						parts = append(parts, fmt.Sprintf("%v°C", temp))
@@ -73,25 +84,6 @@ func SetupHandlers(bot *tele.Bot, cfg *Config) {
 			sections = append(sections, strings.Join(lines, "\n"))
 		}
 
-		if len(cfg.Devices.WaterLeak) > 0 {
-			lines := []string{"\xf0\x9f\x92\xa7 Протечки:"}
-			for _, dev := range cfg.Devices.WaterLeak {
-				val, ok := deviceState.Load(dev.FriendlyName)
-				if !ok {
-					lines = append(lines, fmt.Sprintf("  %s: нет данных", dev.Alias))
-					continue
-				}
-				state, _ := val.(map[string]interface{})
-				leak, _ := state["water_leak"].(bool)
-				if leak {
-					lines = append(lines, fmt.Sprintf("  %s: \xf0\x9f\x9a\xa8 УТЕЧКА", dev.Alias))
-				} else {
-					lines = append(lines, fmt.Sprintf("  %s: норма", dev.Alias))
-				}
-			}
-			sections = append(sections, strings.Join(lines, "\n"))
-		}
-
 		if len(sections) == 0 {
 			return c.Send("Нет датчиков в конфигурации")
 		}
@@ -99,7 +91,7 @@ func SetupHandlers(bot *tele.Bot, cfg *Config) {
 	})
 
 	bot.Handle("/relay", func(c tele.Context) error {
-		if len(cfg.Devices.Relay) == 0 {
+		if len(cfg.Relay) == 0 {
 			return c.Send("Нет реле в конфигурации")
 		}
 		return c.Send("Реле:", relayKeyboard(cfg))
@@ -107,10 +99,10 @@ func SetupHandlers(bot *tele.Bot, cfg *Config) {
 
 	bot.Handle(&tele.InlineButton{Unique: "relay_on"}, func(c tele.Context) error {
 		idx, err := strconv.Atoi(c.Callback().Data)
-		if err != nil || idx < 0 || idx >= len(cfg.Devices.Relay) {
+		if err != nil || idx < 0 || idx >= len(cfg.Relay) {
 			return c.Respond(&tele.CallbackResponse{Text: "Некорректный индекс реле"})
 		}
-		dev := cfg.Devices.Relay[idx]
+		dev := cfg.Relay[idx]
 		if err := PublishRelay(cfg, dev, "ON"); err != nil {
 			log.Printf("Ошибка публикации MQTT: %v", err)
 			return c.Respond(&tele.CallbackResponse{Text: "Ошибка отправки команды"})
@@ -122,10 +114,10 @@ func SetupHandlers(bot *tele.Bot, cfg *Config) {
 
 	bot.Handle(&tele.InlineButton{Unique: "relay_off"}, func(c tele.Context) error {
 		idx, err := strconv.Atoi(c.Callback().Data)
-		if err != nil || idx < 0 || idx >= len(cfg.Devices.Relay) {
+		if err != nil || idx < 0 || idx >= len(cfg.Relay) {
 			return c.Respond(&tele.CallbackResponse{Text: "Некорректный индекс реле"})
 		}
-		dev := cfg.Devices.Relay[idx]
+		dev := cfg.Relay[idx]
 		if err := PublishRelay(cfg, dev, "OFF"); err != nil {
 			log.Printf("Ошибка публикации MQTT: %v", err)
 			return c.Respond(&tele.CallbackResponse{Text: "Ошибка отправки команды"})
@@ -143,7 +135,7 @@ func SetupHandlers(bot *tele.Bot, cfg *Config) {
 func relayKeyboard(cfg *Config) *tele.ReplyMarkup {
 	menu := &tele.ReplyMarkup{}
 	var rows []tele.Row
-	for i, dev := range cfg.Devices.Relay {
+	for i, dev := range cfg.Relay {
 		current := "OFF"
 		if val, ok := deviceState.Load(dev.FriendlyName); ok {
 			if state, ok := val.(map[string]interface{}); ok {

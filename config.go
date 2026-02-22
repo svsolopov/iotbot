@@ -13,8 +13,15 @@ type DeviceInfo struct {
 	Type         string   `yaml:"type"`
 	StateKey     string   `yaml:"state_key"`
 	Unit         string   `yaml:"unit"`
+	Notify       string   `yaml:"notify"`
 	Interlock    []string `yaml:"interlock"`
 	Countdown    int      `yaml:"countdown"`
+}
+
+type SensorSection struct {
+	Section string       `yaml:"section"`
+	Emoji   string       `yaml:"emoji"`
+	Items   []DeviceInfo `yaml:"items"`
 }
 
 type Config struct {
@@ -28,11 +35,8 @@ type Config struct {
 		Username string `yaml:"username"`
 		Password string `yaml:"password"`
 	} `yaml:"mqtt"`
-	Devices struct {
-		WaterLeak []DeviceInfo `yaml:"water_leak"`
-		Climate   []DeviceInfo `yaml:"climate"`
-		Relay     []DeviceInfo `yaml:"relay"`
-	} `yaml:"devices"`
+	Sensors []SensorSection `yaml:"sensors"`
+	Relay   []DeviceInfo    `yaml:"relay"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -47,15 +51,16 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.MQTT.Port == 0 {
 		cfg.MQTT.Port = 1883
 	}
-	for i := range cfg.Devices.Relay {
-		if cfg.Devices.Relay[i].StateKey == "" {
-			cfg.Devices.Relay[i].StateKey = "state"
+	for i := range cfg.Relay {
+		if cfg.Relay[i].StateKey == "" {
+			cfg.Relay[i].StateKey = "state"
 		}
 	}
 	// Установить тип по умолчанию для всех устройств
-	setDefaultType(cfg.Devices.WaterLeak)
-	setDefaultType(cfg.Devices.Climate)
-	setDefaultType(cfg.Devices.Relay)
+	for i := range cfg.Sensors {
+		setDefaultType(cfg.Sensors[i].Items)
+	}
+	setDefaultType(cfg.Relay)
 	return &cfg, nil
 }
 
@@ -69,23 +74,13 @@ func setDefaultType(devs []DeviceInfo) {
 
 func (cfg *Config) KnownDevices() map[string]string {
 	known := make(map[string]string)
-	for _, d := range cfg.Devices.WaterLeak {
-		known[d.FriendlyName] = d.Type
+	for _, section := range cfg.Sensors {
+		for _, d := range section.Items {
+			known[d.FriendlyName] = d.Type
+		}
 	}
-	for _, d := range cfg.Devices.Climate {
-		known[d.FriendlyName] = d.Type
-	}
-	for _, d := range cfg.Devices.Relay {
+	for _, d := range cfg.Relay {
 		known[d.FriendlyName] = d.Type
 	}
 	return known
-}
-
-func FindDevice(devices []DeviceInfo, friendlyName string) *DeviceInfo {
-	for i := range devices {
-		if devices[i].FriendlyName == friendlyName {
-			return &devices[i]
-		}
-	}
-	return nil
 }

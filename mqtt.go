@@ -84,12 +84,12 @@ func handleMQTTMessage(msg mqtt.Message, cfg *Config, bot *tele.Bot) {
 
 	// ESPHome: {device}/sensor/{sensor_id}/state
 	if devType, ok := knownDevices[parts[0]]; ok && devType == "esphome" {
-		handleESPHomeMessage(parts, msg)
+		handleESPHomeMessage(parts, msg, cfg, bot)
 	}
 }
 
 func handleZ2MMessage(parts []string, msg mqtt.Message, cfg *Config, bot *tele.Bot) {
-	if parts[1] == "bridge" || parts[len(parts)-1] == "set" {
+	if parts[1] == "bridge" || parts[len(parts)-1] == "set" || parts[len(parts)-1] == "get" {
 		return
 	}
 
@@ -104,15 +104,20 @@ func handleZ2MMessage(parts []string, msg mqtt.Message, cfg *Config, bot *tele.B
 	}
 	deviceState.Store(friendlyName, data)
 
-	// Проверяем утечку воды
-	if leak, ok := data["water_leak"]; ok {
-		if leakBool, ok := leak.(bool); ok && leakBool {
-			dev := FindDevice(cfg.Devices.WaterLeak, friendlyName)
-			if dev != nil {
-				text := fmt.Sprintf("\xf0\x9f\x9a\xa8 УТЕЧКА ВОДЫ: %s (%s)", dev.Alias, dev.FriendlyName)
+	// Проверяем устройства с notify: instant
+	for _, section := range cfg.Sensors {
+		for _, dev := range section.Items {
+			if dev.Notify != "instant" || dev.FriendlyName != friendlyName || dev.StateKey == "" {
+				continue
+			}
+			val, ok := data[dev.StateKey]
+			if !ok {
+				continue
+			}
+			if boolVal, ok := val.(bool); ok && boolVal {
+				text := fmt.Sprintf("%s %s: %s (%s)", section.Emoji, section.Section, dev.Alias, dev.FriendlyName)
 				recipient := &chatID{id: cfg.Telegram.ChatID}
-				_, err := bot.Send(recipient, text)
-				if err != nil {
+				if _, err := bot.Send(recipient, text); err != nil {
 					log.Printf("Ошибка отправки уведомления: %v", err)
 				}
 			}
@@ -120,7 +125,7 @@ func handleZ2MMessage(parts []string, msg mqtt.Message, cfg *Config, bot *tele.B
 	}
 }
 
-func handleESPHomeMessage(parts []string, msg mqtt.Message) {
+func handleESPHomeMessage(parts []string, msg mqtt.Message, cfg *Config, bot *tele.Bot) {
 	// Формат: {device}/sensor/{sensor_id}/state
 	if len(parts) != 4 || parts[1] != "sensor" || parts[3] != "state" {
 		return
@@ -136,47 +141,69 @@ func handleESPHomeMessage(parts []string, msg mqtt.Message) {
 		state = make(map[string]interface{})
 	}
 
+	// Запомнить старое значение для сравнения
+	oldVal := state[sensorID]
+
 	// Попробовать распарсить как float64
+	var newVal interface{}
 	if f, err := strconv.ParseFloat(value, 64); err == nil {
-		state[sensorID] = f
+		newVal = f
 	} else {
-		state[sensorID] = value
+		newVal = value
 	}
+	state[sensorID] = newVal
 	deviceState.Store(deviceName, state)
+
+	// Уведомления для ESPHome-устройств с notify: instant
+	if oldVal != newVal {
+		for _, section := range cfg.Sensors {
+			for _, dev := range section.Items {
+				if dev.Notify != "instant" || dev.Type != "esphome" || dev.FriendlyName != deviceName || dev.StateKey != sensorID {
+					continue
+				}
+				unit := dev.Unit
+				if unit != "" {
+					unit = " " + unit
+				}
+				text := fmt.Sprintf("%s %s: %s — %v%s", section.Emoji, section.Section, dev.Alias, newVal, unit)
+				recipient := &chatID{id: cfg.Telegram.ChatID}
+				if _, err := bot.Send(recipient, text); err != nil {
+					log.Printf("Ошибка отправки уведомления: %v", err)
+				}
+			}
+		}
+	}
 }
 
 func requestAllStates(c mqtt.Client, cfg *Config) {
-	var all []DeviceInfo
-	for _, dev := range cfg.Devices.Climate {
-		if dev.Type != "esphome" {
-			all = append(all, dev)
-		}
-	}
-	for _, dev := range cfg.Devices.WaterLeak {
-		if dev.Type != "esphome" {
-			all = append(all, dev)
+	requested := make(map[string]bool)
+	count := 0
+
+	// Сенсоры: запрашиваем полное состояние, дедуплицируя по friendly_name
+	for _, section := range cfg.Sensors {
+		for _, dev := range section.Items {
+			if dev.Type == "esphome" || requested[dev.FriendlyName] {
+				continue
+			}
+			requested[dev.FriendlyName] = true
+			topic := fmt.Sprintf("zigbee2mqtt/%s/get", dev.FriendlyName)
+			c.Publish(topic, 0, false, []byte(`{"state":""}`))
+			count++
 		}
 	}
 
-	// Для реле запрашиваем по конкретному state_key, дедуплицируя по friendly_name
-	requested := make(map[string]bool)
-	for _, dev := range cfg.Devices.Relay {
+	// Реле: тоже дедуплицируем по friendly_name
+	for _, dev := range cfg.Relay {
 		if dev.Type == "esphome" || requested[dev.FriendlyName] {
 			continue
 		}
 		requested[dev.FriendlyName] = true
-		all = append(all, dev)
+		topic := fmt.Sprintf("zigbee2mqtt/%s/get", dev.FriendlyName)
+		c.Publish(topic, 0, false, []byte(`{"state":""}`))
+		count++
 	}
 
-	for _, dev := range all {
-		topic := fmt.Sprintf("zigbee2mqtt/%s/get", dev.FriendlyName)
-		payload := fmt.Sprintf(`{"%s":""}`, dev.StateKey)
-		if dev.StateKey == "" {
-			payload = `{"state":""}`
-		}
-		c.Publish(topic, 0, false, []byte(payload))
-	}
-	log.Printf("Запрошено состояние %d устройств", len(all))
+	log.Printf("Запрошено состояние %d устройств", count)
 }
 
 func PublishRelay(cfg *Config, dev DeviceInfo, state string) error {

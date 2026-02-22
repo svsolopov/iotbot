@@ -39,29 +39,48 @@ mqtt:
   username: "user"
   password: "pass"
 
-devices:
-  water_leak:               # датчики протечки воды
-    - friendly_name: "water_leak_kitchen"
-      alias: "Кухня"
+sensors:                    # произвольные секции датчиков
+  - section: "Климат"
+    emoji: "🌡"
+    items:
+      - friendly_name: "temp_sensor"
+        alias: "Гостиная"
+        # type: z2m             — необязательно, по умолчанию "z2m"
+        # без state_key → автодетект temperature/humidity
 
-  climate:                  # датчики климата (температура, влажность)
-    - friendly_name: "temp_sensor"
-      alias: "Гостиная"
-      # type: z2m             — необязательно, по умолчанию "z2m"
+  - section: "Протечки"
+    emoji: "💧"
+    items:
+      - friendly_name: "water_leak_kitchen"
+        alias: "Кухня"
+        state_key: "water_leak"
+        notify: instant       # мгновенное уведомление при срабатывании
 
-    - friendly_name: "pulsar"
-      alias: "ХВС"
-      type: esphome
-      state_key: "pulsar_1_channel_1"
-      unit: "м³"
+  - section: "Счётчики воды"
+    emoji: "🔢"
+    items:
+      - friendly_name: "pulsar"
+        alias: "ХВС"
+        type: esphome
+        state_key: "pulsar_1_channel_1"
+        unit: "м³"
+        notify: instant       # уведомление при изменении показаний
 
-  relay:                    # управляемые реле
-    - friendly_name: "relay1"
-      alias: "Бойлер"
-      # state_key: "state"       — необязательно, по умолчанию "state"
-      # countdown: 900           — автоотключение через N секунд (0 = нет)
-      # interlock: ["state_l2"]  — при ON выключить указанные каналы того же устройства
+relay:                      # управляемые реле
+  - friendly_name: "relay1"
+    alias: "Бойлер"
+    # state_key: "state"       — необязательно, по умолчанию "state"
+    # countdown: 900           — автоотключение через N секунд (0 = нет)
+    # interlock: ["state_l2"]  — при ON выключить указанные каналы того же устройства
 ```
+
+### SensorSection
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|-------------|----------|
+| `section` | string | да | Название секции, отображаемое в `/sensors` |
+| `emoji` | string | да | Эмодзи секции, выводится перед названием |
+| `items` | []DeviceInfo | да | Список устройств в секции |
 
 ### Поля устройства (DeviceInfo)
 
@@ -70,8 +89,9 @@ devices:
 | `friendly_name` | string | да | Имя устройства в Zigbee2MQTT или ESPHome |
 | `alias` | string | да | Отображаемое имя в Telegram |
 | `type` | string | нет | Тип источника: `"z2m"` (Zigbee2MQTT, по умолчанию) или `"esphome"` |
-| `state_key` | string | нет | Ключ состояния. Для z2m: ключ в JSON (по умолчанию `"state"`). Для esphome: `sensor_id` из топика |
+| `state_key` | string | нет | Ключ состояния. Для z2m: ключ в JSON (по умолчанию `"state"`). Для esphome: `sensor_id` из топика. Для сенсоров: если не указан — автодетект `temperature`/`humidity` |
 | `unit` | string | нет | Единица измерения для отображения (например, `"м³"`, `"°C"`). Используется в `/sensors` |
+| `notify` | string | нет | Режим уведомлений: `"instant"` — мгновенное уведомление. Для z2m: при `bool true` в `state_key`. Для esphome: при изменении значения. По умолчанию пусто — только по `/sensors` |
 | `countdown` | int | нет | Автоотключение: секунды до автоматического OFF. Ключ countdown формируется заменой `state` на `countdown` в `state_key` |
 | `interlock` | []string | нет | Список state_key каналов, которые нужно выключить при включении данного канала (взаимная блокировка) |
 
@@ -127,7 +147,7 @@ devices:
   MQTT Broker  -------->  handleMQTTMessage()
        ^                         |
        |                         v
-  Zigbee2MQTT            Уведомление об утечке -> Telegram
+  Zigbee2MQTT            Уведомления (notify: instant) -> Telegram
        ^
        |
   Zigbee-устройства
@@ -148,13 +168,13 @@ devices:
 ### Структуры
 
 - `DeviceInfo` — описание одного устройства (см. таблицу полей выше)
-- `Config` — корневая структура: секции `Telegram`, `MQTT`, `Devices`
+- `SensorSection` — секция датчиков: название, эмодзи, список items
+- `Config` — корневая структура: секции `Telegram`, `MQTT`, `Sensors`, `Relay`
 
 ### Функции
 
 - `LoadConfig(path string) (*Config, error)` — читает YAML-файл, парсит, применяет значения по умолчанию (порт 1883, state_key "state" для реле, type "z2m" для всех устройств)
 - `(*Config) KnownDevices() map[string]string` — возвращает отображение `friendly_name -> type` для всех устройств из конфигурации (для фильтрации MQTT-сообщений и определения обработчика)
-- `FindDevice(devices []DeviceInfo, friendlyName string) *DeviceInfo` — поиск устройства по `friendly_name` в срезе
 
 ## Модуль mqtt.go — MQTT-клиент
 
@@ -186,15 +206,17 @@ devices:
 3. Извлечь `friendly_name` из `parts[1]`
 4. **Проверка по белому списку**: если `friendly_name` нет в `knownDevices` — игнорировать
 5. Сохранить в `deviceState`
-6. Если в данных есть `water_leak: true` и устройство найдено в `cfg.Devices.WaterLeak` — немедленно отправить уведомление в Telegram
+6. Итерация по всем секциям и items с `notify: "instant"`: если `friendly_name` совпадает и `state_key` задан, а значение `bool true` — отправить уведомление в Telegram с эмодзи и названием секции
 
-### handleESPHomeMessage(parts, msg)
+### handleESPHomeMessage(parts, msg, cfg, bot)
 
 Обработка сообщений ESPHome. Формат топика: `{device}/sensor/{sensor_id}/state`.
 1. Проверить что топик имеет ровно 4 части, `parts[1] == "sensor"`, `parts[3] == "state"`
 2. Загрузить текущий `map[string]interface{}` из `deviceState` (или создать новый)
-3. Записать `sensor_id -> значение` (попытка парсинга как `float64`, иначе строка)
-4. Сохранить обратно в `deviceState`
+3. Запомнить старое значение для сравнения
+4. Записать `sensor_id -> значение` (попытка парсинга как `float64`, иначе строка)
+5. Сохранить обратно в `deviceState`
+6. Если значение изменилось — итерация по секциям: для items с `notify: "instant"`, совпадающим `friendly_name` и `state_key` — отправить уведомление в Telegram (формат: `"{emoji} {section}: {alias} — {значение} {unit}"`)
 
 ### requestAllStates(client, cfg)
 
@@ -229,17 +251,15 @@ Middleware проверяет `c.Chat().ID == cfg.Telegram.ChatID`. Если н�
 Отправляет текстовое меню с перечнем доступных команд.
 
 #### /sensors
-Формирует текстовое сообщение с текущими показаниями:
+Формирует текстовое сообщение с текущими показаниями. Секции формируются динамически из `cfg.Sensors`:
 
-**Секция "Климат"** (если есть climate-устройства):
-- Для каждого z2m-устройства: извлекает `temperature` и `humidity` из JSON. Формат: `Alias: 23.5°C, 45%`
-- Для каждого esphome-устройства: извлекает значение по `state_key` из собранного map. Формат: `Alias: значение unit`
+Для каждой секции выводится заголовок `"{emoji} {section}:"`, затем для каждого item:
+- Если `state_key` пуст — автодетект: показать `temperature°C, humidity%`
+- Если `state_key` задан — прочитать значение:
+  - `bool true` → "⚠️ сработал"
+  - `bool false` → "норма"
+  - число/строка → `"значение unit"`
 - Если данных нет: `Alias: нет данных`
-
-**Секция "Протечки"** (если есть water_leak-устройства):
-- Для каждого устройства: проверяет `water_leak` (bool) в состоянии
-- `true` -> "УТЕЧКА" (с эмодзи сирены)
-- `false` -> "норма"
 
 #### /relay
 Отправляет сообщение с inline-клавиатурой, сформированной функцией `relayKeyboard()`.
@@ -250,7 +270,7 @@ Middleware проверяет `c.Chat().ID == cfg.Telegram.ChatID`. Если н�
 1. Название (alias) — кнопка `relay_noop`, ничего не делает
 2. Текущее состояние (ON/OFF) — кнопка `relay_on` или `relay_off`
 
-В callback data передаётся индекс реле в массиве `cfg.Devices.Relay`.
+В callback data передаётся индекс реле в массиве `cfg.Relay`.
 
 #### relay_on (обработчик)
 1. Парсит индекс из callback data, валидирует границы
@@ -355,7 +375,7 @@ cp config.example.yaml config.yaml
 - [ ] MQTT через TLS: добавить опциональные поля `tls_cert`, `tls_key`, `tls_ca` в секцию mqtt; переключать схему на `ssl://`
 - [ ] Уникальный MQTT Client ID: генерировать `"mkbot-" + hostname` или UUID вместо статического `"mkbot"`
 - [ ] Rate limiting на управление реле: минимальный интервал между командами на одно реле (2-3 секунды)
-- [ ] Debounce уведомлений об утечке: не отправлять повторное уведомление, если предыдущее было менее 5 минут назад
+- [ ] Debounce уведомлений (notify: instant): не отправлять повторное уведомление, если предыдущее было менее 5 минут назад
 - [ ] QoS 1 для критических операций: подписка и публикация команд реле
 - [ ] Авторизация по user ID для команд управления (дополнительно к chat ID)
 - [ ] Добавить `.gitignore` с записью `config.yaml`
