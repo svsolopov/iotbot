@@ -169,9 +169,11 @@ func handleESPHomeMessage(parts []string, msg mqtt.Message, cfg *Config, bot *te
 }
 
 func sendInstantNotification(bot *tele.Bot, cfg *Config, section SensorSection, dev DeviceInfo, oldVal, newVal interface{}) {
-	// Не уведомлять при первом получении значения (с nil на известное)
+	// При первом получении значения уведомлять только о тревоге (bool true)
 	if oldVal == nil {
-		return
+		if boolVal, ok := newVal.(bool); !ok || !boolVal {
+			return
+		}
 	}
 	var text string
 	if boolVal, ok := newVal.(bool); ok {
