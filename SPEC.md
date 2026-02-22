@@ -91,7 +91,7 @@ relay:                      # управляемые реле
 | `type` | string | нет | Тип источника: `"z2m"` (Zigbee2MQTT, по умолчанию) или `"esphome"` |
 | `state_key` | string | нет | Ключ состояния. Для z2m: ключ в JSON (по умолчанию `"state"`). Для esphome: `sensor_id` из топика. Для сенсоров: если не указан — автодетект `temperature`/`humidity` |
 | `unit` | string | нет | Единица измерения для отображения (например, `"м³"`, `"°C"`). Используется в `/sensors` |
-| `notify` | string | нет | Режим уведомлений: `"instant"` — мгновенное уведомление. Для z2m: при `bool true` в `state_key`. Для esphome: при изменении значения. По умолчанию пусто — только по `/sensors` |
+| `notify` | string | нет | Режим уведомлений: `"instant"` — мгновенное уведомление при изменении значения (не зависит от типа устройства). Первое получение значения игнорируется. По умолчанию пусто — только по `/sensors` |
 | `countdown` | int | нет | Автоотключение: секунды до автоматического OFF. Ключ countdown формируется заменой `state` на `countdown` в `state_key` |
 | `interlock` | []string | нет | Список state_key каналов, которые нужно выключить при включении данного канала (взаимная блокировка) |
 
@@ -201,12 +201,12 @@ relay:                      # управляемые реле
 ### handleZ2MMessage(parts, msg, cfg, bot)
 
 Обработка сообщений Zigbee2MQTT:
-1. Игнорировать топики `bridge` и заканчивающиеся на `/set`
+1. Игнорировать топики `bridge` и заканчивающиеся на `/set` или `/get`
 2. Распарсить JSON payload в `map[string]interface{}`
 3. Извлечь `friendly_name` из `parts[1]`
 4. **Проверка по белому списку**: если `friendly_name` нет в `knownDevices` — игнорировать
-5. Сохранить в `deviceState`
-6. Итерация по всем секциям и items с `notify: "instant"`: если `friendly_name` совпадает и `state_key` задан, а значение `bool true` — отправить уведомление в Telegram с эмодзи и названием секции
+5. Загрузить предыдущее состояние для сравнения, сохранить новое в `deviceState`
+6. Для items с `notify: "instant"` — вызвать `sendInstantNotification` при изменении значения
 
 ### handleESPHomeMessage(parts, msg, cfg, bot)
 
@@ -216,7 +216,14 @@ relay:                      # управляемые реле
 3. Запомнить старое значение для сравнения
 4. Записать `sensor_id -> значение` (попытка парсинга как `float64`, иначе строка)
 5. Сохранить обратно в `deviceState`
-6. Если значение изменилось — итерация по секциям: для items с `notify: "instant"`, совпадающим `friendly_name` и `state_key` — отправить уведомление в Telegram (формат: `"{emoji} {section}: {alias} — {значение} {unit}"`)
+6. Для items с `notify: "instant"` — вызвать `sendInstantNotification` при изменении значения
+
+### sendInstantNotification(bot, cfg, section, dev, oldVal, newVal)
+
+Единая функция уведомлений для всех типов устройств:
+1. Если `oldVal == nil` (первое получение значения) — не уведомлять
+2. Для bool: `true` → "⚠️ сработал", `false` → "норма"
+3. Для числа/строки: значение с единицей измерения
 
 ### requestAllStates(client, cfg)
 

@@ -102,25 +102,26 @@ func handleZ2MMessage(parts []string, msg mqtt.Message, cfg *Config, bot *tele.B
 	if knownDevices[friendlyName] == "" {
 		return
 	}
+	// Загрузить предыдущее состояние для сравнения
+	oldData, _ := deviceState.Load(friendlyName)
+	oldState, _ := oldData.(map[string]interface{})
 	deviceState.Store(friendlyName, data)
 
-	// Проверяем устройства с notify: instant
+	// Проверяем устройства с notify: instant (только при изменении значения)
 	for _, section := range cfg.Sensors {
 		for _, dev := range section.Items {
 			if dev.Notify != "instant" || dev.FriendlyName != friendlyName || dev.StateKey == "" {
 				continue
 			}
-			val, ok := data[dev.StateKey]
+			newVal, ok := data[dev.StateKey]
 			if !ok {
 				continue
 			}
-			if boolVal, ok := val.(bool); ok && boolVal {
-				text := fmt.Sprintf("%s %s: %s (%s)", section.Emoji, section.Section, dev.Alias, dev.FriendlyName)
-				recipient := &chatID{id: cfg.Telegram.ChatID}
-				if _, err := bot.Send(recipient, text); err != nil {
-					log.Printf("Ошибка отправки уведомления: %v", err)
-				}
+			oldVal, _ := oldState[dev.StateKey]
+			if oldVal == newVal {
+				continue
 			}
+			sendInstantNotification(bot, cfg, section, dev, oldVal, newVal)
 		}
 	}
 }
@@ -154,24 +155,41 @@ func handleESPHomeMessage(parts []string, msg mqtt.Message, cfg *Config, bot *te
 	state[sensorID] = newVal
 	deviceState.Store(deviceName, state)
 
-	// Уведомления для ESPHome-устройств с notify: instant
+	// Уведомления для устройств с notify: instant
 	if oldVal != newVal {
 		for _, section := range cfg.Sensors {
 			for _, dev := range section.Items {
-				if dev.Notify != "instant" || dev.Type != "esphome" || dev.FriendlyName != deviceName || dev.StateKey != sensorID {
+				if dev.Notify != "instant" || dev.FriendlyName != deviceName || dev.StateKey != sensorID {
 					continue
 				}
-				unit := dev.Unit
-				if unit != "" {
-					unit = " " + unit
-				}
-				text := fmt.Sprintf("%s %s: %s — %v%s", section.Emoji, section.Section, dev.Alias, newVal, unit)
-				recipient := &chatID{id: cfg.Telegram.ChatID}
-				if _, err := bot.Send(recipient, text); err != nil {
-					log.Printf("Ошибка отправки уведомления: %v", err)
-				}
+				sendInstantNotification(bot, cfg, section, dev, oldVal, newVal)
 			}
 		}
+	}
+}
+
+func sendInstantNotification(bot *tele.Bot, cfg *Config, section SensorSection, dev DeviceInfo, oldVal, newVal interface{}) {
+	// Не уведомлять при первом получении значения (с nil на известное)
+	if oldVal == nil {
+		return
+	}
+	var text string
+	if boolVal, ok := newVal.(bool); ok {
+		status := "норма"
+		if boolVal {
+			status = "⚠️ сработал"
+		}
+		text = fmt.Sprintf("%s %s: %s — %s", section.Emoji, section.Section, dev.Alias, status)
+	} else {
+		unit := dev.Unit
+		if unit != "" {
+			unit = " " + unit
+		}
+		text = fmt.Sprintf("%s %s: %s — %v%s", section.Emoji, section.Section, dev.Alias, newVal, unit)
+	}
+	recipient := &chatID{id: cfg.Telegram.ChatID}
+	if _, err := bot.Send(recipient, text); err != nil {
+		log.Printf("Ошибка отправки уведомления: %v", err)
 	}
 }
 
