@@ -13,10 +13,13 @@ import (
 	tele "gopkg.in/telebot.v4"
 )
 
+const notifyCooldown = 5 * time.Minute
+
 var (
 	deviceState  sync.Map
 	mqttClient   mqtt.Client
 	knownDevices map[string]string
+	lastNotify   sync.Map // "friendlyName:stateKey" -> time.Time
 )
 
 func StartMQTT(cfg *Config, bot *tele.Bot) {
@@ -175,6 +178,14 @@ func sendInstantNotification(bot *tele.Bot, cfg *Config, section SensorSection, 
 			return
 		}
 	}
+	// Cooldown: не чаще одного раза в 5 минут на устройство+ключ
+	notifyKey := dev.FriendlyName + ":" + dev.StateKey
+	if last, ok := lastNotify.Load(notifyKey); ok {
+		if time.Since(last.(time.Time)) < notifyCooldown {
+			return
+		}
+	}
+	lastNotify.Store(notifyKey, time.Now())
 	var text string
 	if boolVal, ok := newVal.(bool); ok {
 		status := "норма"
